@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ats-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ats-frontend
+  template:
+    metadata:
+      labels:
+        app: ats-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/youruser/ats-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          env:
+            - name: VITE_API_BASE
+              value: http://ats-backend:8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ats-frontend
+spec:
+  selector:
+    app: ats-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+
+

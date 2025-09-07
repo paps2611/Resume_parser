@@ -1,0 +1,26 @@
+version: '3.9'
+services:
+  backend:
+    build: ./backend
+    container_name: ats-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - UVICORN_WORKERS=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    container_name: ats-frontend
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    depends_on:
+      - backend
+
+
