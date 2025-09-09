@@ -3,7 +3,7 @@ import axios from 'axios'
 import { Upload, FileText, CheckCircle, AlertCircle, Star } from 'lucide-react'
 import CorrectionsModal from '../components/CorrectionsModal'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
 type ScoreBreakdown = {
   keyword_match: number

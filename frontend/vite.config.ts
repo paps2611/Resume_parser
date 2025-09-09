@@ -7,6 +7,9 @@ export default defineConfig({
 		port: 5173,
 		strictPort: true,
 	},
+	define: {
+		'import.meta.env.VITE_API_BASE': JSON.stringify(process.env.VITE_API_BASE || 'http://localhost:8000')
+	}
 })
 
 

@@ -1,5 +1,17 @@
 version: '3.9'
 services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE=http://${EC2_PUBLIC_IP:-localhost}:8000
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+
   backend:
     build: ./backend
     container_name: ats-backend
@@ -12,15 +24,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-
-  frontend:
-    build: ./frontend
-    container_name: ats-frontend
-    ports:
-      - "5173:80"
-    environment:
-      - VITE_API_BASE=http://localhost:8000
-    depends_on:
-      - backend
-
 

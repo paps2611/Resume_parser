@@ -6,11 +6,23 @@ from .ats_scoring import score_resume_bytes, parse_resume, generate_refined_resu
 
 app = FastAPI(title="ATS Resume Scorer", version="1.0.0")
 
+# CORS configuration for production
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://*.vercel.app",  # Vercel frontend domains
+]
+
+# Add your production frontend URL here
+import os
+if os.getenv("FRONTEND_URL"):
+    allowed_origins.append(os.getenv("FRONTEND_URL"))
+
 app.add_middleware(
 	CORSMiddleware,
-	allow_origins=["*"],
+	allow_origins=allowed_origins,
 	allow_credentials=True,
-	allow_methods=["*"],
+	allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 	allow_headers=["*"],
 )
 
