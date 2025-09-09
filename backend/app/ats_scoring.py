@@ -3,11 +3,12 @@ from __future__ import annotations
 import io
 import re
 from typing import Dict, List, Tuple
+from docx import Document  # type: ignore
 
 from pydantic import BaseModel
 
 try:
-	import docx2txt  # .docx
+	import docx2txt  # .docx (fallback)
 except Exception:  # pragma: no cover
 	docx2txt = None  # type: ignore
 
@@ -47,11 +48,18 @@ def _extract_text_from_pdf(file_bytes: bytes) -> str:
 
 
 def _extract_text_from_docx(file_bytes: bytes) -> str:
-	if docx2txt is None:
-		raise RuntimeError("docx2txt not installed")
-	# docx2txt expects a path; use temporary in-memory workaround
-	# Fallback: return empty if not supported in environment
-	return docx2txt.process(io.BytesIO(file_bytes))  # type: ignore[arg-type]
+	# Use python-docx for stability; fallback to docx2txt if needed
+	try:
+		doc = Document(io.BytesIO(file_bytes))
+		paras = [p.text for p in doc.paragraphs]
+		return "\n".join(paras)
+	except Exception:
+		if docx2txt is None:
+			raise
+		try:
+			return docx2txt.process(io.BytesIO(file_bytes))  # type: ignore[arg-type]
+		except Exception:
+			return ""
 
 
 def extract_text(file_bytes: bytes, filename: str) -> str:
@@ -165,11 +173,153 @@ def score_resume_bytes(file_bytes: bytes, filename: str, job_description: str) -
 		suggestions.append("Include a reachable phone number with country code.")
 	if len_score < 80:
 		suggestions.append("Target 1 page (junior) or 1–2 pages (senior) with concise bullets.")
+	
+	# Enhanced analysis for detailed view
+	jd_words = re.findall(r"[a-zA-Z]+", job_description.lower()) if job_description else []
+	jd_set = set(jd_words)
+	resume_set = set(parsed.words)
+	matched_keywords = list(jd_set & resume_set)
+	missing_keywords = list(jd_set - resume_set)[:20]
+	
+	# Section analysis
+	section_analysis = {}
+	for section, present in parsed.sections_present.items():
+		section_analysis[section] = {
+			"present": present,
+			"score": 100 if present else 0,
+			"suggestion": "Good!" if present else f"Consider adding a {section} section"
+		}
+	
+	# Word frequency analysis
+	word_freq = {}
+	for word in parsed.words:
+		if len(word) > 3:  # Only meaningful words
+			word_freq[word] = word_freq.get(word, 0) + 1
+	
+	# Top keywords found
+	top_keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]
+	
+	# Simplified, always-present fields for UI rendering without feature flags
 	return {
 		"ats_score": overall,
 		"breakdown": breakdown,
 		"suggestions": suggestions,
 		"extracted": {**parsed.contact_info},
+		"resume_text": parsed.text[:4000] + "..." if len(parsed.text) > 4000 else parsed.text,
+		"matched_keywords": matched_keywords,
+		"missing_keywords": missing_keywords,
+		"sections_present": parsed.sections_present,
+		"top_keywords": [{"word": word, "count": count} for word, count in top_keywords],
+		"word_count": len(parsed.words),
 	}
+
+
+def generate_refined_resume_text(parsed_text: str, job_description: str) -> str:
+	from spellchecker import SpellChecker  # type: ignore
+	spell = SpellChecker(distance=1)
+	jd_words = re.findall(r"[a-zA-Z]+", job_description.lower()) if job_description else []
+	core_jd = [w for w in jd_words if len(w) > 3]
+
+	# Normalize whitespace and sentence case
+	text = re.sub(r"[\t\r]+", " ", parsed_text)
+	lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+	# Spell fix per word where clearly misspelled (keep emails/urls/numbers)
+	def fix_spelling(line: str) -> str:
+		words = line.split()
+		fixed = []
+		for w in words:
+			if re.search(r"@|https?://|\d", w):
+				fixed.append(w)
+				continue
+			raw = re.sub(r"[^A-Za-z]", "", w)
+			if raw and raw.isalpha() and raw.lower() in spell:
+				fixed.append(w)
+			else:
+				candidate = spell.correction(raw.lower()) if raw else None
+				fixed.append(w if not candidate or candidate == raw.lower() else w.replace(raw, candidate))
+		return " ".join(fixed)
+
+	cleaned = [fix_spelling(l) for l in lines]
+
+	# Ensure key sections
+	sections: Dict[str, List[str]] = {
+		"summary": [],
+		"skills": [],
+		"experience": [],
+		"education": [],
+		"projects": [],
+	}
+	current = None
+	for l in cleaned:
+		low = l.lower()
+		if any(k in low for k in ["summary", "objective"]):
+			current = "summary"; continue
+		if "skill" in low:
+			current = "skills"; continue
+		if any(k in low for k in ["experience", "employment", "work history"]):
+			current = "experience"; continue
+		if "education" in low:
+			current = "education"; continue
+		if "project" in low:
+			current = "projects"; continue
+		if current:
+			sections[current].append(l)
+
+	# Auto summary
+	if not sections["summary"]:
+		sections["summary"] = [f"Experienced professional focusing on {', '.join(core_jd[:6])}."]
+
+	# Skills: aggregate JD keywords and existing lines
+	jd_unique = sorted(set(core_jd))
+	existing_skills_text = " ".join(sections["skills"]) if sections["skills"] else ""
+	merged_skills = sorted(set(re.findall(r"[A-Za-z+#.]+", existing_skills_text.lower()) + jd_unique))
+	sections["skills"] = ["• " + ", ".join(merged_skills[:30])]
+
+	# Bulletize experience/projects lines
+	def bulletize(items: List[str]) -> List[str]:
+		bulleted = []
+		for it in items:
+			if it.startswith("•"):
+				bulleted.append(it)
+			else:
+				bulleted.append("• " + it.rstrip("."))
+		return bulleted
+	sections["experience"] = bulletize(sections["experience"]) or ["• Describe your most relevant achievements with metrics."]
+	sections["projects"] = bulletize(sections["projects"])
+
+	# Reassemble
+	out: List[str] = []
+	out += ["Summary"] + sections["summary"] + [""]
+	out += ["Skills"] + sections["skills"] + [""]
+	if sections["experience"]:
+		out += ["Experience"] + sections["experience"] + [""]
+	if sections["projects"]:
+		out += ["Projects"] + sections["projects"] + [""]
+	if sections["education"]:
+		out += ["Education"] + sections["education"] + [""]
+	return "\n".join(out).strip()
+
+
+def build_docx_from_text(text: str) -> bytes:
+	doc = Document()
+	for line in text.splitlines():
+		if line.strip() == '':
+			doc.add_paragraph('')
+			continue
+		# Simple headings detection
+		low = line.lower().strip()
+		if low in SECTION_KEYWORDS or low in ['summary', 'skills']:
+			h = doc.add_heading(level=2)
+			h.add_run(line.strip())
+		else:
+			p = doc.add_paragraph(line)
+			if line.strip().startswith('•'):
+				p.style = doc.styles['List Bullet'] if 'List Bullet' in doc.styles else p.style
+	buf = io.BytesIO()
+	doc.save(buf)
+	return buf.getvalue()
+
+
 
 
